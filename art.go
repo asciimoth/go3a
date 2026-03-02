@@ -1,3 +1,12 @@
+// Package go3a implements a parser for the animated ascii art format.
+//
+// Example:
+//
+//	f, _ := os.Open("example.3a")
+//	art, err := threea.Parse3A(f)
+//	if err != nil {
+//	    log.Fatal(err)
+//	}
 package go3a
 
 import (
