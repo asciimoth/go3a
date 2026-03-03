@@ -3,7 +3,7 @@
 // Example:
 //
 //	f, _ := os.Open("example.3a")
-//	art, err := threea.Parse3A(f)
+//	art, err := go3a.Parse3A(f)
 //	if err != nil {
 //	    log.Fatal(err)
 //	}
@@ -13,6 +13,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
+	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/asciimoth/go3a/internal"
@@ -110,65 +113,245 @@ func Parse3A(r io.Reader) (*Art, error) {
 }
 
 func (art *Art) parseBodyBlock(lines []string) error {
-	// Body consists of frames separated by one or more blank lines. A frame consists of lines.
-	// But when colors enabled and channels not pinned, each "logical row" is represented by two consecutive rows:
-	//  - first is text row
-	//  - second is corresponding colors row
-	// That applies line-by-line in the frame.
-	//
-	// We'll split frames first (preserving blank lines inside a frame is not needed).
 	allFrames := internal.SplitFrames(lines)
+
 	colorsEnabled := false
 	if art.Header.ColorsEnable != nil {
 		colorsEnabled = *art.Header.ColorsEnable
 	}
 
-	// If both text and colors pinned or text pinned and colors disabled, body can be omitted - but if present, we'll still parse.
 	for fi, frame := range allFrames {
 		if len(frame) == 0 {
-			// empty frame -> produce empty
 			art.TextFrames = append(art.TextFrames, []string{})
 			art.ColorFrames = append(art.ColorFrames, []string{})
 			continue
 		}
-		// We'll inspect rows: if colors enabled and neither channel is pinned, expect pairs
-		if colorsEnabled && len(art.TextPin) == 0 && len(art.ColorPin) == 0 {
-			// expect even number of rows (pairs)
-			if len(frame)%2 != 0 {
-				// tolerate: treat last unmatched as text-only row with empty colors row
-				// but return error? Spec suggests equal lengths; we'll be lenient but warn via error
-				// For now, we return an error to be strict:
-				return fmt.Errorf("frame %d: expected pairs of rows for text+color, got odd row count %d", fi, len(frame))
-			}
-			var textRows []string
-			var colorRows []string
-			for i := 0; i < len(frame); i += 2 {
-				trow := frame[i]
-				crow := frame[i+1]
-				// Trim trailing spaces on color row? Colors row length must equal text row length - we keep raw but validate lengths.
-				if len([]rune(trow)) != len([]rune(crow)) {
-					// if mismatch, try to pad shorter with default mapping '_' to match rune length
-					// but to be conservative, return error
-					return fmt.Errorf("frame %d: row %d text/col length mismatch (text %d runes, colors %d runes)", fi, i/2, len([]rune(trow)), len([]rune(crow)))
+
+		var textRows []string
+		var colorRows []string
+
+		for ri, row := range frame {
+			runes := []rune(row)
+
+			if colorsEnabled && len(art.TextPin) == 0 && len(art.ColorPin) == 0 {
+				if len(runes)%2 != 0 {
+					return fmt.Errorf(
+						"frame %d row %d: odd length (%d), cannot split evenly into text/color halves",
+						fi, ri, len(runes),
+					)
 				}
-				textRows = append(textRows, trow)
-				colorRows = append(colorRows, crow)
-			}
-			art.TextFrames = append(art.TextFrames, textRows)
-			art.ColorFrames = append(art.ColorFrames, colorRows)
-		} else if colorsEnabled && len(art.TextPin) > 0 {
-			// text pinned: each line is colors row
-			art.ColorFrames = append(art.ColorFrames, append([]string{}, frame...))
-			// text frames are derived from text pin (applies to all frames), we'll leave TextFrames empty
-		} else {
-			// colors disabled or colors pinned: each line is text row
-			art.TextFrames = append(art.TextFrames, append([]string{}, frame...))
-			if !colorsEnabled && len(art.ColorPin) == 0 {
-				// no color frames
-			} else if len(art.ColorPin) > 0 {
-				// colors pinned elsewhere
+
+				mid := len(runes) / 2
+				textPart := string(runes[:mid])
+				colorPart := string(runes[mid:])
+
+				textRows = append(textRows, textPart)
+				colorRows = append(colorRows, colorPart)
+			} else if colorsEnabled && len(art.TextPin) > 0 {
+				// text pinned → entire row is colors
+				colorRows = append(colorRows, row)
+			} else {
+				// colors disabled or colors pinned → entire row is text
+				textRows = append(textRows, row)
 			}
 		}
+
+		if len(textRows) > 0 {
+			art.TextFrames = append(art.TextFrames, textRows)
+		}
+		if len(colorRows) > 0 {
+			art.ColorFrames = append(art.ColorFrames, colorRows)
+		}
 	}
+
 	return nil
+}
+
+// String serializes Art into the 3a textual format.
+// The output is deterministic (sorted mappings/pairs) and suitable for round-trip tests.
+func (a *Art) String() string {
+	var b strings.Builder
+
+	writeLine := func(s string) {
+		b.WriteString(s)
+		b.WriteByte('\n')
+	}
+
+	// Header block (always present)
+	writeLine("@3a")
+
+	// Title
+	if a.Header.Title != "" {
+		writeLine("title " + a.Header.Title)
+	}
+
+	// Orig authors
+	for _, oa := range a.Header.OrigAuthors {
+		writeLine("orig-author " + oa)
+	}
+
+	// Authors
+	for _, au := range a.Header.Authors {
+		writeLine("author " + au)
+	}
+
+	// Editor, src
+	if a.Header.Editor != "" {
+		writeLine("editor " + a.Header.Editor)
+	}
+	if a.Header.Src != "" {
+		writeLine("src " + a.Header.Src)
+	}
+
+	// License (emit if set)
+	if a.Header.License != "" {
+		writeLine("license " + a.Header.License)
+	}
+
+	// Preview (only if non-default)
+	if a.Header.Preview != 0 {
+		writeLine("preview " + strconv.Itoa(a.Header.Preview))
+	}
+
+	// Delay: emit global and frame-specific sorted
+	// Only emit if global != default 50 or there are frame-specific delays
+	if a.Header.DelayGlobal != 50 || len(a.Header.DelayFrame) > 0 {
+		parts := []string{strconv.FormatUint(uint64(a.Header.DelayGlobal), 10)}
+		// sort frame keys
+		keys := make([]int, 0, len(a.Header.DelayFrame))
+		for k := range a.Header.DelayFrame {
+			keys = append(keys, k)
+		}
+		sort.Ints(keys)
+		for _, k := range keys {
+			parts = append(parts, fmt.Sprintf("%d:%d", k, a.Header.DelayFrame[k]))
+		}
+		writeLine("delay " + strings.Join(parts, " "))
+	}
+
+	// Loop: only emit when explicitly "no". Default is yes (omit).
+	if !a.Header.Loop {
+		writeLine("loop no")
+	}
+
+	// Tags: print a single line with all tags (each starts with '#')
+	if len(a.Header.Tags) > 0 {
+		writeLine(strings.Join(a.Header.Tags, " "))
+	}
+
+	// Colors: print if explicit, otherwise if there are col mappings print yes
+	if a.Header.ColorsEnable != nil {
+		if *a.Header.ColorsEnable {
+			writeLine("colors yes")
+		} else {
+			writeLine("colors no")
+		}
+	} else if len(a.Header.Cols) > 0 {
+		writeLine("colors yes")
+	}
+
+	// col mappings: deterministic order by rune
+	if len(a.Header.Cols) > 0 {
+		keys := make([]rune, 0, len(a.Header.Cols))
+		for k := range a.Header.Cols {
+			keys = append(keys, k)
+		}
+		slices.Sort(keys)
+		for _, kr := range keys {
+			cs := a.Header.Cols[kr]
+			// write: col <char> [bg:...] [fg:...]
+			parts := []string{string(kr)}
+			// prefer bg then fg to match examples (order doesn't matter to parser)
+			if cs.BG != "" {
+				parts = append(parts, "bg:"+cs.BG)
+			}
+			if cs.FG != "" {
+				parts = append(parts, "fg:"+cs.FG)
+			}
+			writeLine("col " + strings.Join(parts, " "))
+		}
+	}
+
+	// blank line after header
+	b.WriteByte('\n')
+
+	// Optional text-pin
+	if len(a.TextPin) > 0 {
+		writeLine("@text-pin")
+		for _, ln := range a.TextPin {
+			writeLine(ln)
+		}
+		b.WriteByte('\n')
+	}
+
+	// Optional colors pin
+	if len(a.ColorPin) > 0 {
+		writeLine("@color-pin")
+		for _, ln := range a.ColorPin {
+			writeLine(ln)
+		}
+		b.WriteByte('\n')
+	}
+
+	// Body: only emit if there is any meaningful body data (frames) OR
+	// if both pins are absent but no frames -> emit empty body block (spec requires last block to be body)
+	emitBody := false
+	if len(a.TextFrames) > 0 || len(a.ColorFrames) > 0 {
+		emitBody = true
+	}
+	// If both pins are present and both channels pinned, body may be omitted; we follow presence of frames.
+	if emitBody {
+		writeLine("@body")
+
+		colorsEnabled := false
+		if a.Header.ColorsEnable != nil {
+			colorsEnabled = *a.Header.ColorsEnable
+		} else if len(a.Header.Cols) > 0 {
+			colorsEnabled = true
+		}
+
+		// Determine number of frames to serialize: prefer len(TextFrames) if >0, else len(ColorFrames)
+		nFrames := len(a.TextFrames)
+		if nFrames == 0 {
+			nFrames = len(a.ColorFrames)
+		}
+		for fi := 0; fi < nFrames; fi++ {
+			// if both channels are unpinned and colors enabled: text & colors frames must be paired
+			if colorsEnabled && len(a.TextPin) == 0 && len(a.ColorPin) == 0 {
+				tf := a.TextFrames[fi]
+				cf := a.ColorFrames[fi]
+				for r := range tf {
+					writeLine(tf[r] + cf[r])
+				}
+			} else if colorsEnabled && len(a.TextPin) > 0 {
+				// text pinned: frame lines are color rows only
+				cf := a.ColorFrames[fi]
+				for _, ln := range cf {
+					writeLine(ln)
+				}
+			} else {
+				// colors disabled or colors pinned: write text rows only if present
+				if fi < len(a.TextFrames) {
+					for _, ln := range a.TextFrames[fi] {
+						writeLine(ln)
+					}
+				}
+			}
+			// blank line between frames
+			b.WriteByte('\n')
+		}
+	}
+
+	// Attach block
+	if strings.TrimSpace(a.Attach) != "" {
+		writeLine("@attach")
+		// attach may be multi-line
+		for ln := range strings.SplitSeq(a.Attach, "\n") {
+			writeLine(ln)
+		}
+		b.WriteByte('\n')
+	}
+
+	// Ensure trailing newline on end (builder already adds them)
+	return strings.TrimRight(b.String(), "\n") + "\n"
 }

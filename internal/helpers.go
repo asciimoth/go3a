@@ -81,7 +81,7 @@ func Sanitize(s string) string {
 
 func TrimTrailingEmptyLines(xs []string) []string {
 	end := len(xs)
-	for end > 0 && strings.TrimSpace(xs[end-1]) == "" {
+	for end > 0 && xs[end-1] == "" {
 		end--
 	}
 	return append([]string{}, xs[:end]...)
@@ -89,11 +89,11 @@ func TrimTrailingEmptyLines(xs []string) []string {
 
 func TrimLeadingTrailingEmptyLines(xs []string) []string {
 	start := 0
-	for start < len(xs) && strings.TrimSpace(xs[start]) == "" {
+	for start < len(xs) && xs[start] == "" {
 		start++
 	}
 	end := len(xs)
-	for end > start && strings.TrimSpace(xs[end-1]) == "" {
+	for end > start && xs[end-1] == "" {
 		end--
 	}
 	return append([]string{}, xs[start:end]...)
@@ -116,12 +116,9 @@ func SplitFrames(lines []string) [][]string {
 		cur = nil
 	}
 	for _, ln := range lines {
-		if strings.TrimSpace(ln) == "" {
+		if ln == "" {
 			if len(cur) > 0 {
 				appendCur()
-			} else {
-				// multiple blank lines: treat as separator => produce empty frames only if we had created something?
-				// We'll continue.
 			}
 		} else {
 			cur = append(cur, ln)
