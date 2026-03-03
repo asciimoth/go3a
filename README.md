@@ -1,5 +1,24 @@
 # go3a
 
+go3a is parser library for [animated ascii art format](https://github.com/asciimoth/3a/).  
+[![3a logo](https://github.com/asciimoth/3a/blob/main/logo.webp)](https://github.com/asciimoth/3a/blob/main/logo.3a)
+
+Usage example:
+```go
+f, _ := os.Open("example.3a")
+art, err := go3a.Parse3A(f)
+if err != nil {
+    log.Fatal(err)
+}
+fmt.Println(art)
+```
+
+## Related links
+- [3a format spec](https://github.com/DomesticMoth/3a)
+- [aaa tool](https://github.com/asciimoth/aaa)
+- [rs3a](https://github.com/DomesticMoth/rs3a)
+- [py3a](https://github.com/DomesticMoth/py3a) (outdated)
+
 ## License
 This project is licensed under either of
 
