@@ -1,6 +1,8 @@
 package go3a_test
 
 import (
+	"embed"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -136,10 +138,8 @@ func TestTextColorPairedBody(t *testing.T) {
 colors yes
 
 @body
-ab
-12
-cd
-34
+ab12
+cd34
 `
 	art := parseMust(t, src)
 
@@ -155,18 +155,6 @@ cd
 	if art.TextFrames[0][1] != "cd" || art.ColorFrames[0][1] != "34" {
 		t.Fatalf("pair row 1 incorrect")
 	}
-}
-
-func TestTextColorOddRowsError(t *testing.T) {
-	src := `@3a
-colors yes
-
-@body
-ab
-12
-cd
-`
-	parseErr(t, src)
 }
 
 func TestTextPin(t *testing.T) {
@@ -234,4 +222,63 @@ func TestMissingHeaderError(t *testing.T) {
 hello
 `
 	parseErr(t, src)
+}
+
+//go:embed tests/*
+var testsFS embed.FS
+
+func TestArtStringRoundTrip(t *testing.T) {
+	entries, err := testsFS.ReadDir("tests")
+	if err != nil {
+		t.Fatalf("read tests dir: %v", err)
+	}
+
+	// build map of basenames -> in/out
+	type pair struct{ in, out string }
+	cases := map[string]*pair{}
+
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() {
+			continue
+		}
+		ext := filepath.Ext(name)
+		base := strings.TrimSuffix(name, ext)
+		p, ok := cases[base]
+		if !ok {
+			p = &pair{}
+			cases[base] = p
+		}
+		data, err := testsFS.ReadFile(filepath.Join("tests", name))
+		if err != nil {
+			t.Fatalf("read %s: %v", name, err)
+		}
+		if ext == ".in" {
+			p.in = string(data)
+		} else if ext == ".out" {
+			p.out = string(data)
+		}
+	}
+
+	if len(cases) == 0 {
+		t.Fatalf("no test cases embedded in tests/")
+	}
+
+	for name, p := range cases {
+		if p.in == "" || p.out == "" {
+			t.Fatalf("case %q missing .in or .out (in=%v out=%v)", name, p.in != "", p.out != "")
+		}
+
+		art, err := go3a.Parse3A(strings.NewReader(p.in))
+		if err != nil {
+			t.Fatalf("Parse3A(%s.in) failed: %v", name, err)
+		}
+		got := art.String()
+		want := p.out
+
+		// Compare exactly
+		if got != want {
+			t.Fatalf("case %q: output mismatch\n--- got ---\n%s\n--- want ---\n%s\n", name, got, want)
+		}
+	}
 }
