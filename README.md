@@ -14,10 +14,10 @@ fmt.Println(art)
 ```
 
 ## Related links
-- [3a format spec](https://github.com/DomesticMoth/3a)
+- [3a format spec](https://github.com/asciimoth/3a)
 - [aaa tool](https://github.com/asciimoth/aaa)
-- [rs3a](https://github.com/DomesticMoth/rs3a)
-- [py3a](https://github.com/DomesticMoth/py3a) (outdated)
+- [rs3a](https://github.com/asciimoth/rs3a)
+- [py3a](https://github.com/asciimoth/py3a)
 
 ## License
 This project is licensed under either of
